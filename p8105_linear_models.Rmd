@@ -75,4 +75,17 @@ fit %>%
 ```
 
 # Diagnostics
+add_residuals() from the modelr package gives you the residuals from a tidied,
+fitted model for every observation. The output is the the same dataset you put 
+into it with an added column for the residuals.
+```{r}
+modelr::add_residuals(nyc_airbnb, fit)
+```
+You can plot the residuals or run tests on them to assess the fit of your model.
+
+add_predictions() from modelr package is the same as add_residuals() except it
+gives you the predicted y values based on the model for each observation.
+```{r}
+modelr::add_predictions(nyc_airbnb, fit)
+```
 
