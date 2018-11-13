@@ -89,3 +89,104 @@ gives you the predicted y values based on the model for each observation.
 modelr::add_predictions(nyc_airbnb, fit)
 ```
 
+
+# Hypothesis testing
+Just use tidy() to get the p-values.
+```{r}
+fit %>% 
+  broom::tidy()
+```
+
+Compare nested models. We can test and see if adding room type to the model
+is better than the null model. anova() can only be used to test nested models.
+```{r}
+fit_null = lm(price ~ stars + boro, data = nyc_airbnb)
+fit_alt = lm(price ~ stars + boro + room_type, data = nyc_airbnb)
+
+anova(fit_null, fit_alt) %>% 
+  broom::tidy()
+```
+Based on this ANOVA, we can say the alt model with room_type is different from 
+the null model and better.
+
+
+# Nesting data
+```{r}
+nyc_airbnb %>% 
+  lm(price ~ stars * boro + room_type * boro, data = .) %>% 
+  broom::tidy() %>% 
+  knitr::kable(digits = 3)
+
+nest_lm_res =
+  nyc_airbnb %>% 
+  group_by(boro) %>% 
+  nest() %>% 
+  mutate(models = map(data, ~lm(price ~ stars + room_type, data = .x)),
+         models = map(models, broom::tidy)) %>% 
+  select(-data) %>% 
+  unnest()
+```
+
+
+### Crazier example
+```{r}
+manhattan_airbnb =
+  nyc_airbnb %>% 
+  filter(boro == "Manhattan")
+
+manhattan_nest_lm_res =
+  manhattan_airbnb %>% 
+  group_by(neighborhood) %>% 
+  nest() %>% 
+  mutate(models = map(data, ~lm(price ~ stars + room_type, data = .x)),
+         models = map(models, broom::tidy)) %>% 
+  select(-data) %>% 
+  unnest()
+```
+
+Can show average difference in price from whole apartment/home for each 
+neighborhood by room type. A shared room appears to save you a little more 
+money vs. a whole apartment compared to a private room vs. whole apartment.
+```{r}
+manhattan_nest_lm_res %>% 
+  filter(str_detect(term, "room_type")) %>% 
+  ggplot(aes(x = neighborhood, y = estimate)) + 
+  geom_point() + 
+  facet_wrap(~term) + 
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+```
+
+
+# Binary outcomes
+```{r}
+data_url <- RCurl::getURL('https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv')
+
+baltimore_df = 
+  readr::read_csv(data_url) %>% 
+  filter(city == "Baltimore") %>% 
+  mutate(resolved = as.numeric(disposition == "Closed by arrest"),
+         victim_age = as.numeric(victim_age),
+         victim_race = fct_relevel(victim_race, "White")) %>% 
+  select(resolved, victim_age, victim_race, victim_sex)
+
+glm(resolved ~ victim_age + victim_race, data = baltimore_df, 
+    family = binomial())
+```
+
+Can tidy logistic regression model output
+```{r}
+fit_logistic <- glm(resolved ~ victim_age + victim_race, data = baltimore_df, 
+    family = binomial())
+
+fit_logistic %>% 
+  broom::tidy() %>% 
+  mutate(OR = boot::inv.logit(estimate))
+```
+
+Some exploratory graphing suggests that age doesn't have a continuous, linear
+effect on whether or not the homicide is resolved. 
+```{r}
+baltimore_df %>% 
+  ggplot(aes(x = victim_age, y = resolved)) + geom_point() + geom_smooth()
+```
+
