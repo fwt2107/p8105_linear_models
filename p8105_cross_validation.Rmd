@@ -1,0 +1,166 @@
+---
+title: "Cross_validation"
+author: "Felix Tran"
+date: "November 13, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(modelr)
+library(mgcv)
+
+set.seed(1)
+```
+
+# Create a nonlinear dataset as an example
+```{r}
+nonlin_df = tibble(
+  id = 1:100,
+  x = runif(100, 0, 1),
+  y = 1 - 10 * (x - .3) ^ 2 + rnorm(100, 0, .3)
+)
+
+ggplot(nonlin_df, aes(x = x, y = y)) + geom_point() + theme_bw()
+```
+
+### Make a training and testing dataset
+sample_n() takes random samples from our example dataset. anti_join() lets
+take the remaining observations from the example dataset.
+```{r}
+train_df <- sample_n(nonlin_df, 80)
+test_df <- anti_join(nonlin_df, train_df, by = "id")
+
+ggplot(train_df, aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_point(data = test_df, color = "red")
+```
+
+### Fitting some models
+gam() fits a smooth curve through a given dataset.
+
+Looking at the models, we can see the linear model is underfitting, the 
+wiggly model is overfitting, and the middle model seems to be a good fit. 
+```{r}
+lin_mod = lm(y ~ x, data = train_df)
+nonlin_mod = mgcv::gam(y ~ s(x), data = train_df)
+wiggly_mod = mgcv::gam(y ~ s(x, k = 30), sp = 10e-6, data = train_df)
+
+train_df %>% 
+  add_predictions(nonlin_mod) %>% 
+  ggplot(aes(x = x, y = y)) + geom_point() + 
+  geom_line(aes(y = pred), color = "red")
+
+train_df %>% 
+  add_predictions(wiggly_mod) %>% 
+  ggplot(aes(x = x, y = y)) + geom_point() + 
+  geom_line(aes(y = pred), color = "red")
+
+train_df %>% 
+  gather_predictions(lin_mod, nonlin_mod, wiggly_mod) %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_line(aes(y = pred), color = "red") + 
+  facet_wrap(~model)
+```
+
+### Calculate RMSE to verify which model is the best fit
+The nonlin_mod has the smallest RMSE, which suggests it is the best fit of the
+3 models. We are calculating the RMSE on the test data (NOT the training data).
+```{r}
+rmse(lin_mod, test_df)
+
+rmse(nonlin_mod, test_df)
+
+rmse(wiggly_mod, test_df)
+```
+
+### Repeating the process to verify our previous result wasn't a fluke
+Iterates random partitions. Gives you list cols of training and test datasets.
+```{r}
+cv_df = 
+  crossv_mc(nonlin_df, 100) 
+```
+
+```{r}
+cv_df =
+  cv_df %>% 
+  mutate(train = map(train, as_tibble),
+         test = map(test, as_tibble))
+
+cv_df = 
+  cv_df %>% 
+  mutate(lin_mod    = map(train, ~lm(y ~ x, data = .x)),
+         nonlin_mod = map(train, ~mgcv::gam(y ~ s(x), data = .x)),
+         wiggly_mod = map(train, ~gam(y ~ s(x, k = 30), sp = 10e-6, data = .x))) %>% 
+  mutate(rmse_lin    = map2_dbl(lin_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_nonlin = map2_dbl(nonlin_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_wiggly = map2_dbl(wiggly_mod, test, ~rmse(model = .x, data = .y)))
+
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  gather(key = model, value = rmse) %>% 
+  mutate(model = str_replace(model, "rmse_", ""),
+         model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+Graphing the RMSE's of all the iterations, the linear model is the worst. 
+The nonlinear model appears to have the best fit of the 3 models.
+
+# Case study: Growth of Nepalese children
+Question: Is arm circumference related to weight?
+```{r}
+child_growth = read_csv("./data/nepalese_children.csv")
+```
+
+```{r}
+child_growth %>% 
+  ggplot(aes(x = weight, y = armc)) + 
+  geom_point(alpha = .5)
+```
+
+### Fitting models
+```{r}
+child_growth =
+  child_growth %>% 
+  mutate(weight_sp = (weight > 7) * (weight - 7))
+
+lin_mod = lm(armc ~ weight, data = child_growth)
+pwl_mod = lm(armc ~ weight + weight_sp, data = child_growth)
+nonlin_mod = gam(armc ~ s(weight), data = child_growth)
+
+child_growth %>% 
+  gather_predictions(lin_mod, pwl_mod, nonlin_mod) %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = weight, y = armc)) + 
+  geom_point(alpha = .5) +
+  geom_line(aes(y = pred), color = "red") + 
+  facet_grid(~model)
+```
+
+### Making training and testing splits
+```{r}
+cv_df =
+  crossv_mc(child_growth, 100) %>% 
+  mutate(train = map(train, as_tibble),
+         test = map(test, as_tibble))
+
+cv_df = 
+  cv_df %>% 
+  mutate(lin_mod = map(train, ~lm(armc ~ weight, data = .x)),
+         pwl_mod = map(train, ~lm(armc ~ weight + weight_sp, data = .x)),
+         nonlin_mod = map(train, ~gam(armc ~ s(weight), data = as_tibble(.x)))) %>% 
+  mutate(rmse_lin    = map2_dbl(lin_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_pwl = map2_dbl(pwl_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_nonlin = map2_dbl(nonlin_mod, test, ~rmse(model = .x, data = .y)))
+
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  gather(key = model, value = rmse) %>% 
+  mutate(model = str_replace(model, "rmse_", ""),
+         model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
